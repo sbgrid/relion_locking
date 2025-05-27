@@ -1908,35 +1908,38 @@ void PipeLine::read(bool do_lock, std::string lock_message)
 	std::cerr << "entering read lock_message=" << lock_message << std::endl;
 #endif
 	FileName name_wo_dir = name;
-	FileName dir_lock=".relion_lock", fn_lock=".relion_lock/lock_" + name_wo_dir.afterLastOf("/") + "_pipeline.star";;
+	FileName fn_lock="lock_" + name_wo_dir.afterLastOf("/") + "_pipeline.star";;
+	FileName fn_pipeline= name_wo_dir + "_pipeline.star";
 	if (do_lock && !do_read_only)
 	{
 		int iwait =0;
-		int status = mkdir(dir_lock.c_str(), S_IRWXU);
+		int status = access(fn_pipeline.c_str(), R_OK) && access(fn_pipeline.c_str(), W_OK);
+
+		if (status != 0)
+			if (errno == EACCES) // interestingly, not EACCESS!
+				REPORT_ERROR("ERROR: PipeLine::read cannot access " + fn_pipeline + ". You don't have write permission to this project. If you want to look at other's project directory (but run nothing there), please start RELION with --readonly.");
+			else if (errno == EROFS)
+				REPORT_ERROR("ERROR: PipeLine::read cannot access " + fn_pipeline + ". You are on a read-only file system.");
+			// Checks disk space when opening/writing to pipeline file in PipeLine::write
+
+		status = access(fn_lock.c_str(), F_OK);
 
 #ifdef DEBUG_LOCK
 		std::cerr <<  " A status= " << status << std::endl;
 #endif
-		while (status != 0)
+		while (status == 0) // Lock file exists
 		{
-			if (errno == EACCES) // interestingly, not EACCESS!
-				REPORT_ERROR("ERROR: PipeLine::read cannot create a lock directory " + dir_lock + ". You don't have write permission to this project. If you want to look at other's project directory (but run nothing there), please start RELION with --readonly.");
-			else if (errno == ENOSPC)
-				REPORT_ERROR("ERROR: PipeLine::read cannot create a lock directory " + dir_lock + ". There is not enough space on the disk to do so.");
-			else if (errno == EROFS)
-				REPORT_ERROR("ERROR: PipeLine::read cannot create a lock directory " + dir_lock + ". You are on a read-only file system.");
-
 			// If the lock exists: wait 3 seconds and try again
 			// Third time round, print a warning message; after 40 tries abort
 			if (iwait == 3)
 			{
-				std::cout << " WARNING: trying to read pipeline.star, but directory " << dir_lock << " exists (which protects against simultaneous writing by multiple instances of the GUI)" << std::endl;
+				std::cout << " WARNING: trying to read pipeline.star, but lock file " << fn_lock << " exists (which protects against simultaneous writing by multiple instances of the GUI)" << std::endl;
                 std::cout << " WARNING: Perhaps the GUI or one of RELION's programs crashed unexpectedly? " << std::endl;
                 std::cout << " WARNING: You may want to check if your default_pipeline.star in this directory has been corrupted in the process." << std::endl;
                 std::cout << " WARNING: If so, you can copy a backup from the directory of the last job you executed. " << std::endl;
 			}
 			sleep(3);
-			status =  mkdir(dir_lock.c_str(), S_IRWXU);
+			status = access(fn_lock.c_str(), F_OK) == 0;
 #ifdef DEBUG_LOCK
 			std::cerr <<  " B status= " << status << std::endl;
 #endif
@@ -1945,7 +1948,7 @@ void PipeLine::read(bool do_lock, std::string lock_message)
 			if (iwait > 20)
 			{
 
-				REPORT_ERROR("ERROR: PipeLine::read has waited for 1 minute for lock directory to disappear.You may want to manually remove the lock file: " + fn_lock);
+				REPORT_ERROR("ERROR: PipeLine::read has waited for 1 minute for lock file to disappear.You may want to manually remove the file: " + fn_lock);
 			}
 
 		}
@@ -2137,7 +2140,7 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 		return;
 
 	FileName name_wo_dir = name;
-	FileName dir_lock=".relion_lock", fn_lock=".relion_lock/lock_" + name_wo_dir.afterLastOf("/") + "_pipeline.star";;
+	FileName fn_lock="lock_" + name_wo_dir.afterLastOf("/") + "_pipeline.star";
 	if (do_lock)
 	{
 
@@ -2161,7 +2164,7 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 			iwait++;
 			if (iwait > 40)
 			{
-				REPORT_ERROR("ERROR: PipeLine::read has waited for 2 minutes for lock file to appear, but it doesn't. This should not happen. Is something wrong with the disk access?");
+				REPORT_ERROR("ERROR: PipeLine::write has waited for 2 minutes for lock file to appear, but it doesn't. This should not happen. Is something wrong with the disk access?");
 			}
 		}
 	}
@@ -2170,7 +2173,10 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 	FileName fn = name + "_pipeline.star";
 	fh.open(fn.c_str(), std::ios::out);
 	if (fh.fail())
-		REPORT_ERROR("ERROR: cannot write to pipeline file: " + fn);
+		if (errno == ENOSPC) 
+            REPORT_ERROR("ERROR: cannot write to pipeline file: " + fn + ". There is not enough space on the disk to do so");
+        else 
+			REPORT_ERROR("ERROR: cannot write to pipeline file: " + fn);
 
 	if (fn_del != "")
 	{
@@ -2333,12 +2339,15 @@ void PipeLine::write(bool do_lock, FileName fn_del, std::vector<bool> deleteNode
 		std::cerr << " write pipeline: now deleting " << fn_lock << std::endl;
 #endif
 
+
 		if (!exists(fn_lock))
 			REPORT_ERROR("ERROR: PipeLine::write was expecting a file called "+fn_lock+ " but it is no longer there.");
+
+		// Directory ignored all together
 		if (std::remove(fn_lock.c_str()))
 			REPORT_ERROR("ERROR: PipeLine::write reported error in removing file "+fn_lock);
-		if (rmdir(dir_lock.c_str()))
-			REPORT_ERROR("ERROR: PipeLine::write reported error in removing directory "+dir_lock);
+
+		
 	}
 
 	// Touch a file to indicate to the GUI that the pipeline has just changed

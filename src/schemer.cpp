@@ -672,28 +672,33 @@ void Scheme::read(bool do_lock, FileName fn)
 	if (fn == "") fn = name + "scheme.star";
 
 	FileName name_wo_dir = fn.beforeLastOf("/");
-	FileName dir_lock=".relion_lock_scheme_" + name_wo_dir.afterLastOf("/"), fn_lock=dir_lock + "/lock_scheme";;
+	FileName fn_lock="lock_scheme_" + name_wo_dir.afterLastOf("/");;
+	FileName fn_pipeline= name_wo_dir + "_pipeline.star";
 	if (do_lock && !do_read_only)
 	{
 		int iwait =0;
-		int status = mkdir(dir_lock.c_str(), S_IRWXU);
+		int status = access(fn_pipeline.c_str(), R_OK) && access(fn_pipeline.c_str(), W_OK);
+
+		if (status != 0)
+			if (errno == EACCES) // interestingly, not EACCESS!
+				REPORT_ERROR("ERROR: Scheme::read cannot access " + fn_pipeline + ". You don't have write permission to this project. If you want to look at other's project directory (but run nothing there), please start RELION with --readonly.");
+
+		status = access(fn_lock.c_str(), F_OK);
 
 #ifdef DEBUG_LOCK
 		std::cerr <<  " A status= " << status << std::endl;
 #endif
-		while (status != 0)
-		{
-			if (errno == EACCES) // interestingly, not EACCESS!
-				REPORT_ERROR("ERROR: Scheme::read cannot create a lock directory " + dir_lock + ". You don't have write permission to this project. If you want to look at other's project directory (but run nothing there), please start RELION with --readonly.");
 
+		while (status == 0) //Lock file exists
+		{
 			// If the lock exists: wait 3 seconds and try again
 			// First time round, print a warning message
 			if (iwait == 0)
 			{
-				std::cout << " WARNING: trying to read scheme.star, but directory " << dir_lock << " exists (which protects against simultaneous writing)" << std::endl;
+				std::cout << " WARNING: trying to read scheme.star, but file lock " << fn_lock << " exists (which protects against simultaneous writing)" << std::endl;
 			}
 			sleep(3);
-			status =  mkdir(dir_lock.c_str(), S_IRWXU);
+			status = access(fn_lock.c_str(), F_OK);
 #ifdef DEBUG_LOCK
 			std::cerr <<  " B status= " << status << std::endl;
 #endif
@@ -701,11 +706,11 @@ void Scheme::read(bool do_lock, FileName fn)
 			iwait++;
 			if (iwait > 40)
 			{
-
-				REPORT_ERROR("ERROR: Scheme::read has waited for 2 minutes for lock directory to disappear. Make sure this schemer is not running, and then manually remove the file: " + fn_lock);
+				REPORT_ERROR("ERROR: Scheme::read has waited for 2 minutes for file lock to disappear. Make sure this schemer is not running, and then manually remove the file: " + fn_lock);
 			}
-
 		}
+
+	}
 		// Generate the lock file
 		std::ofstream  fh;
 		fh.open(fn_lock.c_str(), std::ios::out);
@@ -714,7 +719,7 @@ void Scheme::read(bool do_lock, FileName fn)
 		std::string lock_message = "lock mechanism from Schemer";
 		fh << lock_message << std::endl;
 		fh.close();
-	}
+	
 
 	// Clear current model
 	clear();
@@ -836,8 +841,8 @@ bool Scheme::isWriteLocked()
 {
 	FileName name_wo_dir = name;
 	name_wo_dir = name_wo_dir.beforeLastOf("/");
-	FileName dir_lock=".relion_lock_scheme_" + name_wo_dir.afterLastOf("/"), fn_lock=dir_lock + "/lock_scheme";;
-	return exists(dir_lock);
+	FileName fn_lock="lock_scheme_" + name_wo_dir.afterLastOf("/");;
+	return exists(fn_lock);
 }
 
 void Scheme::write(bool do_lock, FileName fn)
@@ -847,7 +852,8 @@ void Scheme::write(bool do_lock, FileName fn)
 
 	FileName name_wo_dir = name;
 	name_wo_dir = name_wo_dir.beforeLastOf("/");
-	FileName dir_lock=".relion_lock_scheme_" + name_wo_dir.afterLastOf("/"), fn_lock=dir_lock + "/lock_scheme";;
+	FileName fn_lock="lock_scheme_" + name_wo_dir.afterLastOf("/");;
+
 	if (do_lock)
 	{
 
@@ -871,7 +877,7 @@ void Scheme::write(bool do_lock, FileName fn)
 			iwait++;
 			if (iwait > 40)
 			{
-				REPORT_ERROR("ERROR: PipeLine::write has waited for 2 minutes for lock file to appear, but it doesn't....");
+				REPORT_ERROR("ERROR: Scheme::write has waited for 2 minutes for lock file to appear, but it doesn't....");
 			}
 		}
 	}
@@ -1932,15 +1938,13 @@ void Scheme::unlock()
 {
 	FileName name_wo_dir = name;
 	name_wo_dir = name_wo_dir.beforeLastOf("/");
-	FileName dir_lock = ".relion_lock_scheme_" + name_wo_dir.afterLastOf("/");
-	FileName fn_lock = dir_lock + "/lock_scheme";;
+	FileName fn_lock = "lock_scheme_" + name_wo_dir.afterLastOf("/");
 
 	if (exists(fn_lock))
 	{
+
 		if (std::remove(fn_lock.c_str()))
-			REPORT_ERROR("ERROR: in removing lock file "+fn_lock);
-		if (rmdir(dir_lock.c_str()))
-			REPORT_ERROR("ERROR: in removing lock directory "+dir_lock);
+			REPORT_ERROR("ERROR: Schemer::write reported error in removing file " + fn_lock);
 	}
 }
 
